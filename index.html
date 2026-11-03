@@ -266,8 +266,6 @@
         padding: 60px 0;
         text-align: center;
       }
-
-      /* Estilo do Modal de Zoom da Foto */
       #modal {
         position: fixed;
         inset: 0;
@@ -292,47 +290,55 @@
     <input type="file" id="f" accept="image/*" hidden />
     <input type="file" id="importFile" accept=".json" hidden />
 
-    <script>
-      const DEFAULT_DATA = {
-        t: "CATÁLOGO DE TÊNIS",
-        s: "DROP EXCLUSIVO • ZER023",
-        pg: "COLEÇÃO · 01",
-        wa: "51999999999",
-        ig: "@zer023.br",
-        items: [
-          {
-            n: "Exemplo Modelo 1",
-            p: "199,90",
-            sz: [
-              [38, 1],
-              [39, 1],
-              [40, 1],
-              [41, 1],
-            ],
-            img: "",
-            tag: true,
-          },
-          {
-            n: "Exemplo Modelo 2",
-            p: "229,90",
-            sz: [
-              [39, 1],
-              [40, 1],
-              [42, 1],
-            ],
-            img: "",
-            tag: false,
-          },
-        ],
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+      import {
+        getFirestore,
+        collection,
+        doc,
+        onSnapshot,
+        query,
+        orderBy,
+        writeBatch,
+      } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+      import {
+        getAuth,
+        onAuthStateChanged,
+        signInWithEmailAndPassword,
+        signOut,
+      } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+      /* ============================================================
+   1) COLE AQUI AS CREDENCIAIS DO SEU PROJETO FIREBASE
+   (Console Firebase > Configurações do projeto > Seus apps > Web)
+   ============================================================ */
+      const firebaseConfig = {
+        apiKey: "COLE_AQUI",
+        authDomain: "COLE_AQUI.firebaseapp.com",
+        projectId: "COLE_AQUI",
+        storageBucket: "COLE_AQUI.firebasestorage.app",
+        messagingSenderId: "COLE_AQUI",
+        appId: "COLE_AQUI",
       };
+      /* ============================================================ */
 
-      let S = JSON.parse(localStorage.getItem("zer023_data")) || DEFAULT_DATA;
-      let IDX = 0,
+      const ADMIN_KEY = "0230"; // abre a área de login em ?admin=0230 (a segurança real é o login + regras)
+      const app = initializeApp(firebaseConfig);
+      const db = getFirestore(app);
+      const auth = getAuth(app);
+      const CFG = doc(db, "config", "catalogo");
+      const COL = collection(db, "produtos");
+
+      const ED =
+        new URLSearchParams(location.search).get("admin") === ADMIN_KEY;
+      let S = { t: "", s: "", pg: "", wa: "", ig: "", items: [] }; // dados da nuvem (o que o cliente vê)
+      let D = null; // rascunho do admin
+      let USER = null,
+        DIRTY = false,
+        LOADED = false,
+        DEL = [],
+        IDX = 0,
         MSG = "";
-
-      // Chave secreta pela URL (Ex: ?admin=0230)
-      const urlParams = new URLSearchParams(window.location.search);
-      const ED = urlParams.get("admin") === "0230";
 
       const $ = (s) => document.querySelector(s),
         A = $("#app");
@@ -341,6 +347,12 @@
           /[&<>"]/g,
           (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
         );
+      const clone = (o) => JSON.parse(JSON.stringify(o));
+      const ADM = () => ED && !!USER && !!D;
+      // Firestore não aceita lista dentro de lista: tamanhos viram [{n,on}] na nuvem
+      const toDB = (z) => z.map(([n, on]) => ({ n, on }));
+      const fromDB = (z) => (z || []).map((x) => [x.n, x.on]);
+
       const LOGO =
         '<svg viewBox="0 0 420 80" width="150" aria-label="ZER023" style="display:block"><g fill="none" stroke="currentColor" stroke-width="12" stroke-miterlimit="2"><path d="M6 6H54L6 74H54"/><path transform="translate(72)" d="M54 6H6V74H54M6 40H46"/><path transform="translate(144)" d="M6 74V6H38Q54 6 54 23Q54 40 38 40H6M32 40L54 74"/><g transform="translate(216)"><rect x="6" y="6" width="48" height="68" rx="24"/><path stroke="#FF3B1D" d="M10 70L50 10"/></g><path transform="translate(288)" d="M6 6H54V40H6V74H54"/><path transform="translate(360)" d="M6 6H54V74H6M20 40H54"/></g></svg>';
       const money = (p) => {
@@ -382,10 +394,55 @@
           .map((n) => [n, n in o ? o[n] : 1]);
       }
 
+      /* ---------- Tempo real: o que o cliente vê vem da nuvem ---------- */
+      function sync() {
+        if (!DIRTY) D = clone(S);
+      }
+      function repaint() {
+        if (!(ADM() && DIRTY)) R();
+      }
+      onSnapshot(
+        CFG,
+        (s) => {
+          if (s.exists()) Object.assign(S, s.data());
+          sync();
+          repaint();
+        },
+        (e) => {
+          MSG = "Erro ao carregar: " + e.code;
+          R();
+        },
+      );
+      onSnapshot(
+        query(COL, orderBy("ord")),
+        (s) => {
+          S.items = s.docs.map((d) => ({
+            id: d.id,
+            ...d.data(),
+            sz: fromDB(d.data().sz),
+          }));
+          LOADED = true;
+          sync();
+          repaint();
+        },
+        (e) => {
+          MSG = "Erro ao carregar: " + e.code;
+          R();
+        },
+      );
+      onAuthStateChanged(auth, (u) => {
+        USER = u;
+        MSG = "";
+        sync();
+        R();
+      });
+
+      /* ---------- Telas ---------- */
       function card(it, i) {
+        const adm = ADM();
         const chips = it.sz
           .map(([n, on]) =>
-            ED
+            adm
               ? `<button class="z${on ? "" : " off"}" data-a="chip" data-i="${i}" data-n="${n}">${n}</button>`
               : `<span class="z${on ? "" : " off"}">${n}</span>`,
           )
@@ -393,8 +450,8 @@
         const ph = it.img
           ? `<img src="${esc(it.img)}" alt="${esc(it.n)}">`
           : `<span class="mo">[imagem do tênis aqui]</span>`;
-
-        if (!ED) {
+        const tag = it.tag ? '<span class="tag">NOVO</span>' : "";
+        if (!adm) {
           const av = it.sz
             .filter((x) => x[1])
             .map((x) => x[0])
@@ -404,82 +461,114 @@
               it.n +
               (av ? " (numeração: " + av + ")" : ""),
           );
-          const clickAction = it.img
-            ? `data-a="zoom" data-img="${esc(it.img)}"`
-            : "";
-          return `<article class="c"><div class="ph" ${clickAction}>${ph}<span class="mo num">${pad(i)}</span>${it.tag ? '<span class="tag">NOVO</span>' : ""}</div><div class="b"><div class="n">${esc(it.n)}</div><div class="p">${esc(money(it.p))}</div><div>${chips}</div>${l ? `<a class="ask" href="${l}" target="_blank" rel="noopener">Pedir no WhatsApp →</a>` : ""}</div></article>`;
+          const zoom = it.img ? `data-a="zoom" data-img="${esc(it.img)}"` : "";
+          return `<article class="c"><div class="ph" ${zoom}>${ph}<span class="mo num">${pad(i)}</span>${tag}</div><div class="b"><div class="n">${esc(it.n)}</div><div class="p">${esc(money(it.p))}</div><div>${chips}</div>${l ? `<a class="ask" href="${l}" target="_blank" rel="noopener">Pedir no WhatsApp →</a>` : ""}</div></article>`;
         }
-
         return `<article class="c">
-    <div class="ph" data-a="img" data-i="${i}">${ph}<span class="mo num">${pad(i)}</span>${it.tag ? '<span class="tag">NOVO</span>' : ""}</div>
-    <div class="b">
-      <button data-a="img" data-i="${i}">${it.img ? "Trocar foto" : "Adicionar foto"}</button>
-      <input class="in" placeholder="Nome do modelo" value="${esc(it.n)}" data-k="items.${i}.n">
-      <input class="in" placeholder="Preço (ex.: 199,90)" value="${esc(it.p)}" data-k="items.${i}.p">
-      <input class="in" placeholder="Tamanhos (ex.: 38-43 ou 38 40 42)" value="${esc(it.sz.map((x) => x[0]).join(" "))}" data-sz="${i}">
-      <div>${chips}</div><small class="mo" style="font-size:10px">Toque no número para marcar esgotado</small>
-      <div class="row">
-        <button data-a="tag" data-i="${i}">${it.tag ? "Tirar “novo”" : "Marcar “novo”"}</button>
-        <button data-a="up" data-i="${i}">↑</button>
-        <button data-a="dn" data-i="${i}">↓</button>
-        <button data-a="del" data-i="${i}">Excluir</button>
-      </div>
-    </div>
-  </article>`;
+<div class="ph" data-a="img" data-i="${i}">${ph}<span class="mo num">${pad(i)}</span>${tag}</div>
+<div class="b">
+<button data-a="img" data-i="${i}">${it.img ? "Trocar foto" : "Adicionar foto"}</button>
+<input class="in" placeholder="Nome do modelo" value="${esc(it.n)}" data-k="items.${i}.n">
+<input class="in" placeholder="Preço (ex.: 199,90)" value="${esc(it.p)}" data-k="items.${i}.p">
+<input class="in" placeholder="Tamanhos (ex.: 38-43 ou 38 40 42)" value="${esc(it.sz.map((x) => x[0]).join(" "))}" data-sz="${i}">
+<div>${chips}</div><small class="mo" style="font-size:10px">Toque no número para marcar esgotado</small>
+<div class="row"><button data-a="tag" data-i="${i}">${it.tag ? "Tirar “novo”" : "Marcar “novo”"}</button><button data-a="up" data-i="${i}">↑</button><button data-a="dn" data-i="${i}">↓</button><button data-a="del" data-i="${i}">Excluir</button></div>
+</div></article>`;
       }
 
       function R() {
-        const vis = S.items
+        const adm = ADM(),
+          L = adm ? D : S;
+        const vis = L.items
           .map((it, i) => [it, i])
-          .filter(([it]) => ED || it.n || it.img);
-
-        // Barra de ferramentas visível APENAS no modo admin secreto
-        const bar = ED
-          ? `<div class="bar">
-    <span class="mo" style="color:var(--r); font-weight:bold;">MODO ADMIN ATIVO</span>
-    <button data-a="add">+ Adicionar modelo</button>
-    <button class="red" data-a="save">Salvar Alterações</button>
-    <button data-a="export">Exportar Backup</button>
-    <button data-a="import">Importar Backup</button>
-    <span class="mo">${esc(MSG)}</span>
-  </div>`
-          : "";
-
-        const head = ED
-          ? `<input class="in" placeholder="Título da coleção" value="${esc(S.t)}" data-k="t" style="margin-bottom:8px">
-     <input class="in" placeholder="Subtítulo ou data do drop" value="${esc(S.s)}" data-k="s" style="margin-bottom:8px">
-     <input class="in" placeholder="Página (ex.: COLEÇÃO · 01/02)" value="${esc(S.pg)}" data-k="pg">`
+          .filter(([it]) => adm || it.n || it.img);
+        let bar = "";
+        if (adm)
+          bar = `<div class="bar"><span class="mo" style="color:var(--r);font-weight:bold">Modo admin</span><button data-a="add">+ Adicionar modelo</button><button class="red" data-a="save">Salvar na nuvem</button><button data-a="export">Exportar backup</button><button data-a="import">Importar backup</button><button data-a="logout">Sair</button><span class="mo">${esc(MSG || (DIRTY ? "Alterações não salvas" : ""))}</span></div>`;
+        else if (ED)
+          bar = `<div class="bar"><span class="mo" style="color:var(--r);font-weight:bold">Área do administrador</span><input class="in" id="em" type="email" placeholder="E-mail" autocomplete="username" style="max-width:220px"><input class="in" id="pw" type="password" placeholder="Senha" autocomplete="current-password" style="max-width:160px"><button class="red" data-a="login">Entrar</button><span class="mo">${esc(MSG)}</span></div>`;
+        const head = adm
+          ? `<input class="in" placeholder="Título da coleção" value="${esc(D.t)}" data-k="t" style="margin-bottom:8px"><input class="in" placeholder="Subtítulo ou data do drop" value="${esc(D.s)}" data-k="s" style="margin-bottom:8px"><input class="in" placeholder="Página (ex.: COLEÇÃO · 01/02)" value="${esc(D.pg)}" data-k="pg">`
           : `<h1>${esc(S.t)}</h1><div class="mo">${esc(S.s)}</div>`;
-
         const wa = waLink("Olá! Vim pelo catálogo da ZER023."),
           ig = igLink();
-        const foot = ED
-          ? `<div class="cols">
-       <div style="flex:1;min-width:220px"><span class="mo">WhatsApp</span><input class="in" placeholder="(51) 99999-9999" value="${esc(S.wa)}" data-k="wa"></div>
-       <div style="flex:1;min-width:220px"><span class="mo">Instagram</span><input class="in" placeholder="@zer023.br" value="${esc(S.ig)}" data-k="ig"></div>
-     </div>`
+        const foot = adm
+          ? `<div class="cols"><div style="flex:1;min-width:220px"><span class="mo">WhatsApp</span><input class="in" placeholder="(51) 99999-9999" value="${esc(D.wa)}" data-k="wa"></div><div style="flex:1;min-width:220px"><span class="mo">Instagram</span><input class="in" placeholder="@zer023.br" value="${esc(D.ig)}" data-k="ig"></div></div>`
           : `<div class="cols">${S.wa ? `<div><span class="mo">WhatsApp</span><b>${esc(S.wa)}</b></div>` : ""}${S.ig ? `<div><span class="mo">Instagram</span><b>${ig ? `<a href="${ig}" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">${esc(S.ig)}</a>` : esc(S.ig)}</b></div>` : ""}</div>${wa ? `<a class="cta" href="${wa}" target="_blank" rel="noopener">Chamar no WhatsApp</a>` : ""}`;
-
+        const body = !LOADED
+          ? '<div class="empty mo">Carregando…</div>'
+          : vis.length
+            ? `<div class="g">${vis.map(([it, i]) => card(it, i)).join("")}</div>`
+            : '<div class="empty mo">Catálogo vazio</div>';
         A.innerHTML =
           bar +
-          `<div class="w"><div class="top">${LOGO}<span class="mo">${ED ? "" : esc(S.pg)}</span></div><div class="rule"></div>${head}
-  ${vis.length ? `<div class="g">${vis.map(([it, i]) => card(it, i)).join("")}</div>` : '<div class="empty mo">Catálogo vazio</div>'}<footer>${foot}</footer></div>`;
+          `<div class="w"><div class="top">${LOGO}<span class="mo">${adm ? "" : esc(S.pg)}</span></div><div class="rule"></div>${head}${body}<footer>${foot}</footer></div>`;
       }
 
+      /* ---------- Edição (rascunho local) e salvamento na nuvem ---------- */
+      function touch(it) {
+        DIRTY = true;
+        MSG = "";
+        if (it) it._d = true;
+      }
       function setPath(p, v) {
         const k = p.split(".");
-        let o = S;
-        while (k.length > 1) o = o[k.shift()];
+        let o = D,
+          it = null;
+        while (k.length > 1) {
+          o = o[k.shift()];
+          if (o && o.sz) it = o;
+        }
         o[k[0]] = v;
-        MSG = "Alterações não salvas";
+        touch(it);
+      }
+      const newId = () => doc(COL).id;
+      const pub = (it) => ({
+        n: it.n,
+        p: it.p,
+        sz: it.sz,
+        img: it.img,
+        tag: !!it.tag,
+      });
+
+      async function save() {
+        MSG = "Salvando…";
+        R();
+        try {
+          const b = writeBatch(db);
+          b.set(CFG, { t: D.t, s: D.s, pg: D.pg, wa: D.wa, ig: D.ig });
+          D.items.forEach((it, i) => {
+            if (it._d || it._new || it.ord !== i)
+              b.set(doc(COL, it.id), {
+                n: it.n,
+                p: it.p,
+                sz: toDB(it.sz),
+                img: it.img || "",
+                tag: !!it.tag,
+                ord: i,
+              });
+          });
+          DEL.forEach((id) => b.delete(doc(COL, id)));
+          await b.commit();
+          DEL = [];
+          DIRTY = false;
+          MSG = "Salvo na nuvem ✓";
+          sync();
+          R();
+        } catch (e) {
+          MSG =
+            e.code === "permission-denied"
+              ? "Sem permissão: confira as regras e o UID"
+              : "Erro ao salvar: " + (e.code || e.message);
+          R();
+        }
       }
 
       function shrink(file, cb) {
         const im = new Image(),
           u = URL.createObjectURL(file);
         im.onload = () => {
-          const m = 900,
-            s = Math.min(1, m / Math.max(im.width, im.height)),
+          const s = Math.min(1, 800 / Math.max(im.width, im.height)),
             c = document.createElement("canvas");
           c.width = im.width * s;
           c.height = im.height * s;
@@ -488,79 +577,113 @@
           x.fillRect(0, 0, c.width, c.height);
           x.drawImage(im, 0, 0, c.width, c.height);
           URL.revokeObjectURL(u);
-          cb(c.toDataURL("image/jpeg", 0.82));
+          cb(c.toDataURL("image/jpeg", 0.75));
         };
         im.src = u;
       }
 
-      // Eventos
+      /* ---------- Eventos ---------- */
       document.addEventListener("input", (e) => {
         const t = e.target;
-        if (t.dataset.k) setPath(t.dataset.k, t.value);
+        if (ADM() && t.dataset.k) setPath(t.dataset.k, t.value);
       });
       document.addEventListener("change", (e) => {
         const t = e.target;
-        if (t.dataset.sz != null) {
-          const it = S.items[t.dataset.sz];
+        if (ADM() && t.dataset.sz != null) {
+          const it = D.items[t.dataset.sz];
           it.sz = parseSz(t.value, it.sz);
-          MSG = "Alterações não salvas";
+          touch(it);
           R();
         }
       });
-
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") $("#modal").style.display = "none";
+      });
       document.addEventListener("click", (e) => {
         const modal = $("#modal");
         if (e.target.id === "modal" || e.target.id === "modal-img") {
           modal.style.display = "none";
           return;
         }
-
         const t = e.target.closest("[data-a]");
         if (!t) return;
         const a = t.dataset.a,
-          i = +t.dataset.i,
-          L = S.items;
-
+          i = +t.dataset.i;
         if (a === "zoom") {
           $("#modal-img").src = t.dataset.img;
           modal.style.display = "grid";
+          return;
+        }
+        if (a === "login") {
+          signInWithEmailAndPassword(
+            auth,
+            $("#em").value,
+            $("#pw").value,
+          ).catch(() => {
+            MSG = "E-mail ou senha inválidos";
+            R();
+          });
+          return;
+        }
+        if (!ADM()) return;
+        const L = D.items;
+        if (a === "logout") {
+          signOut(auth);
+          return;
         } else if (a === "add") {
-          L.push({ n: "", p: "", sz: [], img: "", tag: false });
-          MSG = "Alterações não salvas";
+          L.push({
+            id: newId(),
+            _new: true,
+            _d: true,
+            n: "",
+            p: "",
+            sz: [],
+            img: "",
+            tag: false,
+          });
+          touch();
         } else if (a === "del") {
           if (!confirm("Excluir este modelo?")) return;
-          L.splice(i, 1);
-          MSG = "Alterações não salvas";
+          const [x] = L.splice(i, 1);
+          if (!x._new) DEL.push(x.id);
+          touch();
         } else if (a === "tag") {
           L[i].tag = !L[i].tag;
-          MSG = "Alterações não salvas";
+          touch(L[i]);
         } else if (a === "chip") {
           const c = L[i].sz.find((x) => x[0] === +t.dataset.n);
           c[1] = c[1] ? 0 : 1;
-          MSG = "Alterações não salvas";
+          touch(L[i]);
         } else if (a === "up" && i > 0) {
           [L[i - 1], L[i]] = [L[i], L[i - 1]];
-          MSG = "Alterações não salvas";
+          touch();
         } else if (a === "dn" && i < L.length - 1) {
           [L[i + 1], L[i]] = [L[i], L[i + 1]];
-          MSG = "Alterações não salvas";
+          touch();
         } else if (a === "img") {
           IDX = i;
           $("#f").click();
           return;
         } else if (a === "save") {
-          localStorage.setItem("zer023_data", JSON.stringify(S));
-          MSG = "Salvo com sucesso!";
+          save();
+          return;
         } else if (a === "export") {
-          const dataStr =
+          const data = {
+            t: D.t,
+            s: D.s,
+            pg: D.pg,
+            wa: D.wa,
+            ig: D.ig,
+            items: D.items.map(pub),
+          };
+          const el = document.createElement("a");
+          el.href =
             "data:text/json;charset=utf-8," +
-            encodeURIComponent(JSON.stringify(S));
-          const dlAnchor = document.createElement("a");
-          dlAnchor.setAttribute("href", dataStr);
-          dlAnchor.setAttribute("download", "zer023_backup.json");
-          document.body.appendChild(dlAnchor);
-          dlAnchor.click();
-          dlAnchor.remove();
+            encodeURIComponent(JSON.stringify(data));
+          el.download = "zer023_backup.json";
+          document.body.appendChild(el);
+          el.click();
+          el.remove();
           MSG = "Backup exportado!";
         } else if (a === "import") {
           $("#importFile").click();
@@ -568,34 +691,54 @@
         }
         R();
       });
-
       $("#f").addEventListener("change", (e) => {
         const f = e.target.files[0];
         e.target.value = "";
-        if (f)
+        if (f && ADM())
           shrink(f, (d) => {
-            S.items[IDX].img = d;
-            MSG = "Alterações não salvas";
+            if (d.length > 900000) {
+              alert("Foto muito pesada. Use uma imagem menor.");
+              return;
+            }
+            D.items[IDX].img = d;
+            touch(D.items[IDX]);
             R();
           });
       });
-
       $("#importFile").addEventListener("change", (e) => {
         const f = e.target.files[0];
         e.target.value = "";
-        if (!f) return;
-        const reader = new FileReader();
-        reader.onload = (event) => {
+        if (!f || !ADM()) return;
+        const r = new FileReader();
+        r.onload = (ev) => {
           try {
-            S = JSON.parse(event.target.result);
-            localStorage.setItem("zer023_data", JSON.stringify(S));
-            MSG = "Backup importado com sucesso!";
+            const j = JSON.parse(ev.target.result);
+            DEL = S.items.map((x) => x.id); // o backup substitui o catálogo atual
+            D = {
+              t: j.t || "",
+              s: j.s || "",
+              pg: j.pg || "",
+              wa: j.wa || "",
+              ig: j.ig || "",
+              items: (j.items || []).map((x) => ({
+                id: newId(),
+                _new: true,
+                _d: true,
+                n: x.n || "",
+                p: x.p || "",
+                sz: x.sz || [],
+                img: x.img || "",
+                tag: !!x.tag,
+              })),
+            };
+            DIRTY = true;
+            MSG = "Backup carregado. Toque em “Salvar na nuvem”.";
             R();
           } catch (err) {
             alert("Arquivo de backup inválido.");
           }
         };
-        reader.readAsText(f);
+        r.readAsText(f);
       });
 
       R();
