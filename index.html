@@ -308,21 +308,18 @@
         signOut,
       } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 
-      /* ============================================================
-   1) COLE AQUI AS CREDENCIAIS DO SEU PROJETO FIREBASE
-   (Console Firebase > Configurações do projeto > Seus apps > Web)
-   ============================================================ */
+      /* Credenciais do Firebase ZER023 */
       const firebaseConfig = {
-        apiKey: "COLE_AQUI",
-        authDomain: "COLE_AQUI.firebaseapp.com",
-        projectId: "COLE_AQUI",
-        storageBucket: "COLE_AQUI.firebasestorage.app",
-        messagingSenderId: "COLE_AQUI",
-        appId: "COLE_AQUI",
+        apiKey: "AIzaSyDln3sW_qM1DgjZ4ibAHHJQGa7QskWlswU",
+        authDomain: "catalogo-zer023.firebaseapp.com",
+        projectId: "catalogo-zer023",
+        storageBucket: "catalogo-zer023.firebasestorage.app",
+        messagingSenderId: "464103075859",
+        appId: "1:464103075859:web:fc6f35a6fd8a0c5b730fe6",
+        measurementId: "G-4JVTKG0PWB",
       };
-      /* ============================================================ */
 
-      const ADMIN_KEY = "0230"; // abre a área de login em ?admin=0230 (a segurança real é o login + regras)
+      const ADMIN_KEY = "0230"; // Parâmetro na URL ?admin=0230 para abrir o login
       const app = initializeApp(firebaseConfig);
       const db = getFirestore(app);
       const auth = getAuth(app);
@@ -331,8 +328,8 @@
 
       const ED =
         new URLSearchParams(location.search).get("admin") === ADMIN_KEY;
-      let S = { t: "", s: "", pg: "", wa: "", ig: "", items: [] }; // dados da nuvem (o que o cliente vê)
-      let D = null; // rascunho do admin
+      let S = { t: "", s: "", pg: "", wa: "", ig: "", items: [] };
+      let D = null;
       let USER = null,
         DIRTY = false,
         LOADED = false,
@@ -349,7 +346,6 @@
         );
       const clone = (o) => JSON.parse(JSON.stringify(o));
       const ADM = () => ED && !!USER && !!D;
-      // Firestore não aceita lista dentro de lista: tamanhos viram [{n,on}] na nuvem
       const toDB = (z) => z.map(([n, on]) => ({ n, on }));
       const fromDB = (z) => (z || []).map((x) => [x.n, x.on]);
 
@@ -394,13 +390,13 @@
           .map((n) => [n, n in o ? o[n] : 1]);
       }
 
-      /* ---------- Tempo real: o que o cliente vê vem da nuvem ---------- */
       function sync() {
         if (!DIRTY) D = clone(S);
       }
       function repaint() {
         if (!(ADM() && DIRTY)) R();
       }
+
       onSnapshot(
         CFG,
         (s) => {
@@ -437,7 +433,6 @@
         R();
       });
 
-      /* ---------- Telas ---------- */
       function card(it, i) {
         const adm = ADM();
         const chips = it.sz
@@ -505,7 +500,6 @@
           `<div class="w"><div class="top">${LOGO}<span class="mo">${adm ? "" : esc(S.pg)}</span></div><div class="rule"></div>${head}${body}<footer>${foot}</footer></div>`;
       }
 
-      /* ---------- Edição (rascunho local) e salvamento na nuvem ---------- */
       function touch(it) {
         DIRTY = true;
         MSG = "";
@@ -582,7 +576,6 @@
         im.src = u;
       }
 
-      /* ---------- Eventos ---------- */
       document.addEventListener("input", (e) => {
         const t = e.target;
         if (ADM() && t.dataset.k) setPath(t.dataset.k, t.value);
@@ -691,6 +684,7 @@
         }
         R();
       });
+
       $("#f").addEventListener("change", (e) => {
         const f = e.target.files[0];
         e.target.value = "";
@@ -705,6 +699,7 @@
             R();
           });
       });
+
       $("#importFile").addEventListener("change", (e) => {
         const f = e.target.files[0];
         e.target.value = "";
@@ -713,7 +708,7 @@
         r.onload = (ev) => {
           try {
             const j = JSON.parse(ev.target.result);
-            DEL = S.items.map((x) => x.id); // o backup substitui o catálogo atual
+            DEL = S.items.map((x) => x.id);
             D = {
               t: j.t || "",
               s: j.s || "",
